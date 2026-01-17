@@ -11,7 +11,7 @@ from google.genai.errors import ClientError
 # 1. Setup Path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 INPUT_FILE = os.path.join(current_dir, "..", "dataset", "raw_lyrics_data.jsonl")
-OUTPUT_FILE = os.path.join(current_dir, "..", "dataset", "dataset_training_ready.jsonl")
+OUTPUT_FILE = os.path.join(current_dir, "..", "dataset", "dataset_interpretation.jsonl")
 
 # 2. Load API Key
 env_path = os.path.join(current_dir, "..", ".env")
@@ -23,7 +23,7 @@ if not api_key:
 
 client = genai.Client(api_key=api_key)
 
-# --- KONFIGURASI MODEL ---
+# --- KONFIGURASI MODEL (TETAP SAMA) ---
 ACTIVE_MODEL = "models/gemini-2.5-flash"
 
 def countdown(seconds):
@@ -45,30 +45,41 @@ def process_dataset():
     print(f"✅ Menggunakan Model: {ACTIVE_MODEL}")
     print(f"🚀 Memproses {len(lines)} lagu...")
 
-    # --- PERBAIKAN 1: SMART RESUME ---
-    # Kita hanya anggap selesai JIKA target_text TIDAK KOSONG.
+    # --- BAGIAN INI DIPERBAIKI (PENGECEKAN) ---
     processed_lyrics = set()
+    valid_lines_count = 0
+    
     if os.path.exists(OUTPUT_FILE):
-        print("🔍 Memeriksa file output yang ada (mencari data kosong)...")
+        print("🔍 Memeriksa file output...")
         with open(OUTPUT_FILE, 'r', encoding='utf-8') as f_out:
             for line in f_out:
                 try:
                     existing_data = json.loads(line)
                     t_text = existing_data.get("target_text", "").strip()
                     
-                    # HANYA masukan ke daftar "selesai" jika text lebih dari 10 karakter
+                    # Validasi: Hanya anggap selesai jika target ada isinya (>10 char)
                     if t_text and len(t_text) > 10:
-                        snippet = existing_data['input_text'].replace("explain_lyric_meaning: ", "")[:50]
-                        processed_lyrics.add(snippet)
+                        full_input = existing_data.get('input_text', "")
+                        
+                        # FIX LOGIC: Menggunakan split, bukan replace.
+                        # Ini aman untuk format "explain_lyric_meaning:" maupun "explain_lyric_meaning (id):"
+                        # Kita ambil teks setelah tanda titik dua (:) yang pertama.
+                        if ": " in full_input:
+                            snippet = full_input.split(": ", 1)[-1][:50].strip()
+                            processed_lyrics.add(snippet)
+                            valid_lines_count += 1
                 except:
                     continue
     
-    print(f"⏭️  Melewati {len(processed_lyrics)} lagu yang SUDAH VALID. Sisanya (termasuk yang kosong) akan diulang.\n")
+    # Audit log biar kamu yakin
+    print(f"📊 Audit Data:")
+    print(f"   - Baris Valid ditemukan: {valid_lines_count}")
+    print(f"   - Lagu Unik terdeteksi: {len(processed_lyrics)}")
+    print(f"⏭️  Sistem akan melewati {len(processed_lyrics)} lagu.\n")
 
     # Buka file dengan mode append
     with open(OUTPUT_FILE, 'a', encoding='utf-8', buffering=1) as outfile:
         
-        # Gunakan tqdm
         pbar = tqdm(lines, desc="Processing")
         
         for line in pbar:
@@ -79,18 +90,17 @@ def process_dataset():
                 
                 if not lyrics: continue
 
-                # Skip jika sudah ada di daftar VALID
-                if lyrics[:50] in processed_lyrics:
+                # SKIP LOGIC (Dicocokkan dengan logic split di atas)
+                if lyrics[:50].strip() in processed_lyrics:
                     continue 
 
                 current_interpretation = data.get("interpretation", "")
                 target_explanation = ""
                 
-                # Logic Generate
+                # Logic Generate (TETAP SAMA)
                 if not current_interpretation or current_interpretation == "Tidak ada deskripsi tersedia.":
                     prompt = f"Judul: {data.get('title', 'Lagu')}\nLirik:\n{lyrics}"
                     
-                    # Tampilkan judul di progress bar
                     pbar.set_description(f"AI: {title[:15]}...")
                     
                     max_retries = 3
@@ -119,19 +129,17 @@ def process_dataset():
                             
                             if response.text:
                                 target_explanation = response.text.strip()
-                                time.sleep(2) # Wajib sleep agak lama untuk 2.5 Flash
+                                time.sleep(2) 
                                 break 
                             else:
-                                target_explanation = "" # Kosong
+                                target_explanation = "" 
                                 break
 
                         except ClientError as e:
-                            # Tangkap Error Limit (429)
                             if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                                countdown(40) # Tunggu 40 detik
+                                countdown(40) 
                                 continue
                             else:
-                                # Error lain, skip lagu ini
                                 target_explanation = ""
                                 break
                         except Exception:
@@ -140,10 +148,8 @@ def process_dataset():
                 else:
                     target_explanation = current_interpretation
 
-                # --- PERBAIKAN 2: EMPTY GUARD ---
-                # JANGAN tulis jika hasilnya kosong atau terlalu pendek
+                # EMPTY GUARD (TETAP SAMA)
                 if not target_explanation or len(target_explanation) < 10:
-                    # pbar.set_description(f"⚠️ Skip Kosong: {title[:10]}")
                     continue
 
                 final_data = {
@@ -153,7 +159,7 @@ def process_dataset():
 
                 outfile.write(json.dumps(final_data, ensure_ascii=False) + "\n")
                 outfile.flush()
-                os.fsync(outfile.fileno()) # Paksa simpan ke harddisk
+                os.fsync(outfile.fileno()) 
 
                 pbar.set_description("Processing")
 
